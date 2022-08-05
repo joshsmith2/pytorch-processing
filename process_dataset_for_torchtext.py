@@ -1,3 +1,4 @@
+from distutils.debug import DEBUG
 from operator import mod
 import torch
 import torch.utils.data as tdata
@@ -12,6 +13,13 @@ import ftfy
 import json
 
 nltk.download('punkt')
+
+def swap_quotes(from_str):
+    """
+    Transfer single to double quotes and vice versa. Needed for JSON parsing
+    """
+    uniq = "~+][+~"
+    return from_str.replace('"', uniq).replace("'", '"').replace(uniq, "'")
 
 class TorchModel:
 
@@ -30,6 +38,12 @@ class TorchModel:
         self.data_dir = os.path.join(root_dir, 'data')
         self.coded_data = os.path.join(self.data_dir, self.model_csv)
 
+        # Use graphics card if it's available
+        self.device = torch.device(
+        'cuda' if torch.cuda.is_available() else 'cpu'
+        )
+
+
     def import_model_data_from_csv(self):
         """
         Import model training datset and set self.json_data to a list of 
@@ -43,34 +57,44 @@ class TorchModel:
             for line in reader:
                 model_dicts.append(line)
 
-        for line in model_dicts:
-            for string_field in self.string_fields:
-                # Fix dodgy unicode encoding. Change field names to any 
-                # string columns in your dataset you expect might contain ðŸŸ¢
-                line[string_field] = ftfy.fix_text(line[string_field])
-
-                # Lowercase
-                line[string_field] = line[string_field].lower()
-
-                # Tokenise
-                line[string_field] = word_tokenize(line[string_field])
-
         # Convert to JSON and return
         self.json_data = json.loads(json.dumps(model_dicts))
 
-    def define_torchtext_datasets(self, training, test, validate):
+    ### TODO: Write a fn to process labels into numbers
+
+    def define_torchtext_datasets(self):
         """
-        Take three lists of tokenised JSON objects and return a list of tt 
+        Take training, test, validate JSON files and return a list of tt 
         datasets
         """
-        fields = {c[1]: (c[1], data.Field()) for c in self.conversions}
-        
-        #return data.TabularDataset.splits(
-        #    path='data',
-        #    train
-        #) 
-        
-        # TODO: Write the json to .json files, I guess, so we can reload them here
+        self.train_df, self.valid_df, self.test_df = data.TabularDataset.splits(
+            path= 'data',
+            train = 'training.json',
+            test = 'test.json',
+            validation = 'validate.json',
+            format = 'json',
+            fields = self.conversions
+        ) 
+
+    def define_iterators(self):
+        """
+        Define an iterator which will return values from each dataset.
+        """
+        self.training, self.valid, self.test = data.BucketIterator.splits(
+            (self.train_df, self.valid_df, self.test_df),
+            batch_sizes = (4,4,4),
+            device = self.device,
+            sort = False
+        )
+
+    def build_vocabs(self):
+        """
+        Build vocabularies for each field in self.fields, based on vocab seen in
+        training
+        """
+        for field in self.fields:
+            field.build_vocab(self.train_df)
+    
     def split_dataset(self, 
                       test_size=100, validate_size=100, seed=24):
         """
@@ -87,15 +111,11 @@ class TorchModel:
                                                        validate_size],
                                                       generator=gen)
 
-        #TODO:Convert fieldnames?
-        
         # Write each set of lines to file        
         for dataset in 'training', 'test', 'validate':
             out_path = os.path.join(self.data_dir, f'{dataset}.json')
             with open(out_path, 'w', encoding='utf-8') as json_file:
-                json_file.write(str(eval(dataset).dataset))
-
-        return training, test, validate
+                json_file.write(json.dumps(eval(dataset).dataset))
 
 def main():
     print("This file really only instantiates a class, TorchModel - use that.")

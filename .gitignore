@@ -1,3 +1,6 @@
 data/*.csv
 data/*.json
 process_*_data.py
+*.pyc
+.data/
+.vector_cache/
